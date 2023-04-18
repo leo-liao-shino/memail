@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+import os
+import sys
+import argparse
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.header import Header
+import csv
+
+def send(args):
+    """
+    Email info
+
+    smtp_server: Your email provider smtp server. 
+    smtp_server: Your email provider smtp server port.
+    smtp_username: Your email address.
+    smtp_password: Your email passphrase
+    """
+    # Setup connection
+    smtp_server = "smtp_server_here"
+    smtp_port = "smtp_server_port_here"
+    smtp_username = "your_email_here"
+    smtp_password = os.environ['EMAIL_PASSWORD']
+    try:
+        smtp_connection = smtplib.SMTP(smtp_server, smtp_port)
+        smtp_connection.starttls()
+        smtp_connection.login(smtp_username, smtp_password)
+    except smtplib.SMTPException as e:
+        print("Error: Unable to connect to SMTP server")
+        print(e)
+        sys.exit(1)
+
+    # Process args
+    with open(args.template, 'r') as file:
+        template = file.read()
+        subject, message_template = template.split('\n\n', 1)
+        subject = subject.split(' ', 1)[1]
+
+    recipients = []
+    with open(args.recipients, newline='') as csvfile:
+        reader = csv.reader(csvfile)
+        # Read header row
+        header = next(reader)
+        # Generate the template dictionary
+        dict_template = {col_name: None for col_name in header}
+        for row in reader:
+            recipient = dict_template.copy()
+            recipient.update(zip(header, row))
+            recipients.append(recipient)
+
+    for recipient in recipients:
+        # Create email object
+        message = MIMEMultipart()
+        message["From"] = smtp_username
+        message["To"] = recipient['email']
+        message["Subject"] = Header(subject, "utf-8")
+        body = message_template.format(**recipient)
+        message.attach(MIMEText(body, "plain", "utf-8"))
+
+        # Add attachment, if have
+        if hasattr(args, 'attach'):
+            for attach in args.attach:
+                with open(attach, 'rb') as file:
+                    att = MIMEText(file.read(), 'base64', 'utf8')
+                    att['Content-Type'] = 'application/octet-stream'
+                    att['Content-Disposition'] = f'attachment; filename="{os.path.basename(attach)}"'
+                    message.attach(att)
+
+        # Send email
+        smtp_connection.sendmail(smtp_username, recipient['email'], message.as_string())
+        print(f"email sent to {recipient['name']}")
+
+    smtp_connection.quit()
+
+
+def parse_args():
+
+    """
+    argument parser
+    """
+
+    parser = argparse.ArgumentParser(
+        prog='memail',
+        description='SMTP-based mass mailing python script',
+        epilog='Send mass email with template, recipients list, and optional attachment',
+    )
+
+    # Email body template parser, only accepting file
+    parser.add_argument('template',
+                        type=str,
+                        help='The txt file path of email body template.',
+                        metavar='[TEMPLATE]')
+    
+    # Email recipients info
+    parser.add_argument('recipients',
+                        type=str,
+                        help='The csv file path of recipients information,\
+                              including the email and things you want to \
+                              replace.',
+                        metavar='[RECIPIENT]')
+    
+    # Option: attachments
+    parser.add_argument('-a', '--attachments',
+                        type=str,
+                        dest='attach',
+                        action='extend',
+                        default=argparse.SUPPRESS,
+                        help='The name of the the file you want to attach\
+                              the email, separated by a space.',
+                        nargs='*')
+    args = parser.parse_args()
+
+    """
+    check validity
+    """
+
+    # Check template is a txt file
+    template = args.template
+    if not os.path.isfile(template):
+        parser.error(f'{template} is not a valid file. See \'%(prog)s -h\'.')
+    temp_extension = os.path.splitext(template)[1]
+    if temp_extension != '.txt':
+        parser.error(f'{template} is not a txt file. See \'%(prog)s -h\'.')
+
+    # Check recipients is a csv file
+    recipients = args.recipients
+    if not os.path.isfile(recipients):
+        parser.error(f'{recipients} is not a valid file. See \'%(prog)s -h\'.')
+    recip_extension = os.path.splitext(recipients)[1]
+    if recip_extension != '.csv':
+        parser.error(f'{recipients} is not a csv file. See \'%(prog)s -h\'.')
+
+    # Check files in attachments are valid file
+    if hasattr(args, 'attach'):
+        for file in args.attach:
+            if not os.path.isfile(file):
+                parser.error(f'{file} is not a valid file.  See \'%(prog)s -h\'.')
+    return args
+
+
+if __name__ == '__main__':
+    args = parse_args()
+    send(args)
